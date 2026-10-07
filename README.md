@@ -51,7 +51,9 @@ FlyNews/
 │   ├── test_scoring.py
 │   ├── test_formatter.py
 │   ├── test_publishing_state.py
+│   ├── test_preview_report.py
 │   └── test_pipeline.py
+├── scripts/write_preview_report.py
 ├── .env.example
 ├── .gitignore
 ├── pyproject.toml
@@ -155,6 +157,15 @@ use `publish`. Maintenance operations are described below. Non-default branches 
 skipped. The separate Tests workflow runs on pushes and pull requests without secrets.
 The application is implemented locally; deployment and real publishing require your
 GitHub repository, API credentials and channel configuration.
+
+After a `dry-run`, its **Summary** page includes a **FlyNews deneme çıktısı** section
+with the preview and diagnostic output. You can also download the `digest-preview-…`
+artifact from that page and open `digest-preview.txt`. These remain available even when
+GitHub's expandable job-log viewer fails to load. The reporting step runs on successful
+and failed dry runs, preserves the original job failure, escapes HTML, and redacts the
+configured credentials before writing the summary or artifact. Preview artifacts expire
+after seven days. An empty digest is shown in the output rather than implying that stories
+were published.
 
 Default cost controls are 40 candidates, batches of eight, at most ten output stories,
 2,400 description characters per AI input, and 15 seconds between AI requests. Missing

@@ -66,16 +66,32 @@ jobs:
         if: steps.state.outputs.cache-matched-key == ''
         run: echo '::warning::No saved state found. This may be the first run or cache eviction. Cross-run duplicate protection needs retained state.'
       - name: Run digest or maintenance
+        id: run
         shell: bash
         run: |
+          mkdir -p data
           case "$OPERATION" in
             publish) python -m src.main ;;
-            dry-run) python -m src.main --dry-run ;;
+            dry-run) python -m src.main --dry-run 2>&1 | tee data/digest-preview.txt ;;
             outbox-status) python -m src.main --outbox-status ;;
             mark-sent) python -m src.main --resolve-message "$OUTBOX_ID" --resolution sent ;;
             retry-message) python -m src.main --resolve-message "$OUTBOX_ID" --resolution retry ;;
             *) exit 2 ;;
           esac
+      - name: Show dry-run output in Summary
+        id: report
+        if: always() && env.OPERATION == 'dry-run' && steps.run.outcome != 'skipped'
+        env:
+          RUN_OUTCOME: ${{ steps.run.outcome }}
+        run: python scripts/write_preview_report.py
+      - name: Save downloadable dry-run output
+        if: always() && env.OPERATION == 'dry-run' && steps.report.outcome == 'success'
+        uses: actions/upload-artifact@v7
+        with:
+          name: digest-preview-${{ github.run_id }}-${{ github.run_attempt }}
+          path: data/digest-preview.txt
+          if-no-files-found: ignore
+          retention-days: 7
       # Immutable per-run key: save even when publishing fails after a partial digest.
       - name: Persist SQLite state
         if: always() && steps.state.outcome == 'success' && env.OPERATION != 'dry-run'
