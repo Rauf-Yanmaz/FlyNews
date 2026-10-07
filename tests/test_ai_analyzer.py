@@ -2,6 +2,7 @@ import json
 from unittest.mock import MagicMock
 
 import pytest
+import requests
 
 from src.ai_analyzer import (
     AnalysisConfigurationError,
@@ -87,6 +88,40 @@ def test_rest_payload_and_response_parsing(article):
     assert generation["responseMimeType"] == "application/json"
     assert generation["responseJsonSchema"]["type"] == "array"
     assert "responseFormat" not in generation
+    assert call.kwargs["timeout"] == (10, 60)
+
+
+@pytest.mark.parametrize(
+    "exception,expected",
+    [
+        (requests.ReadTimeout("secret-key"), "response timed out"),
+        (requests.ConnectionError("secret-key"), "connection failed"),
+    ],
+)
+def test_transport_retries_are_bounded_and_safe(exception, expected, article, monkeypatch):
+    monkeypatch.setattr("src.ai_analyzer.time.sleep", lambda seconds: None)
+    session = MagicMock()
+    session.post.side_effect = exception
+    analyzer = GeminiAnalyzer(
+        Config(request_attempts=2, gemini_timeout_seconds=90, http_timeout_seconds=5), session
+    )
+    with pytest.raises(AnalysisError, match=expected) as result:
+        analyzer._request([article])
+    assert "secret-key" not in str(result.value)
+    assert session.post.call_count == 2
+    assert session.post.call_args.kwargs["timeout"] == (10, 90)
+
+
+def test_gemini_recovers_from_temporary_timeout(article, monkeypatch):
+    monkeypatch.setattr("src.ai_analyzer.time.sleep", lambda seconds: None)
+    session = MagicMock()
+    response = MagicMock(status_code=200)
+    response.json.return_value = {
+        "candidates": [{"finishReason": "STOP", "content": {"parts": [{"text": "[]"}]}}]
+    }
+    session.post.side_effect = [requests.ReadTimeout(), response]
+    assert GeminiAnalyzer(Config(), session)._request([article]) == "[]"
+    assert session.post.call_count == 2
 
 
 def test_truncated_response_rejected(article):

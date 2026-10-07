@@ -88,7 +88,19 @@ def run_pipeline(config: Config) -> int:
                     "No candidate received a valid AI analysis; check Gemini settings"
                 )
             analyzed += cached
-            selected = select_top(analyzed, config)
+            # Original headlines can be paraphrases. Compare the factual Turkish analysis
+            # too, including sent history, before ranking or constructing an outbox message.
+            unique = deduplicate(analyzed, config.dedup_similarity)
+            unique = [
+                article
+                for article in unique
+                if not any(
+                    sent and same_story(article, item, config.dedup_similarity)
+                    for item, sent in history
+                )
+            ]
+            logger.info("%d unique unsent stories remained after AI analysis", len(unique))
+            selected = select_top(unique, config)
             logger.info("%d articles selected", len(selected))
             messages = format_digest(selected, now)
             if config.dry_run:
@@ -100,6 +112,7 @@ def run_pipeline(config: Config) -> int:
                     logger.info("No qualifying stories; no digest to publish")
                 return 0
             database.save_articles(analyzed, now)
+            database.save_articles(unique, now)
             database.prune(now, config.state_retention_days)
             if not messages:
                 logger.info("No qualifying stories; no Telegram message sent")

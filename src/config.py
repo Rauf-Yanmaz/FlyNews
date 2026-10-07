@@ -38,6 +38,7 @@ class Config(BaseModel):
     ai_batch_size: int = Field(default=8, ge=1, le=10)
     ai_batch_delay_seconds: float = Field(default=15, ge=0, le=60)
     http_timeout_seconds: float = Field(default=30, gt=0, le=120)
+    gemini_timeout_seconds: float = Field(default=60, gt=0, le=120)
     request_attempts: int = Field(default=3, ge=1, le=5)
     max_retry_delay_seconds: float = Field(default=60, ge=1, le=60)
     dedup_similarity: float = Field(default=0.86, ge=0.5, le=1)

@@ -5,6 +5,7 @@ import pytest
 from src.config import Config
 from src.database import Database
 from src.main import main, run_pipeline
+from src.utils import fingerprint
 
 
 def test_complete_pipeline_mocked_and_rerun_does_not_repost(tmp_path, article, monkeypatch):
@@ -106,3 +107,39 @@ def test_multiple_current_headlines_reusing_one_cached_item_publish_once(
     assert run_pipeline(settings) == 0
     analyze.assert_not_called()
     assert send.call_args.args[0].count("<b>Ne oldu?</b>") == 1
+
+
+def test_analyzed_paraphrases_publish_once_and_new_variant_matches_sent_history(
+    tmp_path, southwest_stories, monkeypatch
+):
+    now = southwest_stories[0].collected_at
+    later = southwest_stories[1].model_copy(deep=True)
+    later.id = "later-report"
+    later.url = "https://example.com/later-report"
+    later.hash = fingerprint(later.url)
+    later.title = "Flight shopping evolves as conversational AI reaches Southwest customers"
+    later.analysis.article_id = later.id
+    batches = iter(
+        [
+            [story.model_copy(update={"analysis": None}) for story in southwest_stories],
+            [later.model_copy(update={"analysis": None})],
+        ]
+    )
+    monkeypatch.setattr("src.main.utc_now", lambda: now)
+    monkeypatch.setattr("src.main.collect_articles", lambda *args: next(batches))
+    analyze = MagicMock(side_effect=[southwest_stories, [later]])
+    monkeypatch.setattr("src.main.GeminiAnalyzer.analyze", analyze)
+    send = MagicMock(return_value=123)
+    monkeypatch.setattr("src.main.TelegramPublisher.send_message", send)
+    settings = Config(
+        database_path=str(tmp_path / "events.db"),
+        gemini_api_key="test",
+        gemini_model="test-model",
+        telegram_bot_token="test",
+        telegram_chat_id="@test",
+    )
+    assert run_pipeline(settings) == 0
+    assert send.call_args.args[0].count("<b>Ne oldu?</b>") == 1
+    assert run_pipeline(settings) == 0
+    assert send.call_count == 1
+    assert analyze.call_count == 2

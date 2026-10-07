@@ -181,6 +181,16 @@ the REST `generateContent` endpoint. A permanent request, key or model rejection
 batches. Logs include fixed diagnostic hints for invalid/blocked keys, permissions and
 schema problems; provider response bodies and credentials are never printed. Temporary
 batch failures and malformed individual analyses still use the normal recovery behavior.
+`GEMINI_TIMEOUT_SECONDS` defaults to 60 seconds per response read; RSS and Telegram
+keep their separate 30-second `HTTP_TIMEOUT_SECONDS`. Transport retries are bounded,
+and logs distinguish timeouts from connection failures without exposing exception text.
+
+After analysis, a second duplicate check compares factual Turkish titles/summaries.
+Named organization/product launch reports with the same use context can be clustered
+within 36 hours even when original headlines differ. Numbered announcements, rollout
+stages, cancellation events and refund/baggage/loyalty features remain separate.
+Proposed AJet uses never participate in event matching. This check also compares sent
+history, so a newly analyzed paraphrase of an already published event is suppressed.
 
 ## Persistent state and recovery
 
