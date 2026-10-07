@@ -46,6 +46,52 @@ class AnalysisError(RuntimeError):
     pass
 
 
+class AnalysisConfigurationError(AnalysisError):
+    """A rejected request/key/model cannot be repaired by sending more news batches."""
+
+
+def rejection_description(response: requests.Response) -> str:
+    """Map provider diagnostics to fixed text; never log response bodies or credentials."""
+    prefix = f"Gemini rejected request (HTTP {response.status_code})"
+    try:
+        error = response.json().get("error", {})
+        message = error.get("message", "").casefold()
+        details = error.get("details", [])
+        reasons = {
+            detail.get("reason")
+            for detail in details
+            if isinstance(detail, dict) and isinstance(detail.get("reason"), str)
+        }
+    except (ValueError, TypeError, AttributeError):
+        return prefix
+    if "API_KEY_INVALID" in reasons or "api key not valid" in message:
+        return prefix + ": GEMINI_API_KEY is invalid; update the GitHub secret"
+    if "API_KEY_EXPIRED" in reasons or "api key expired" in message:
+        return prefix + ": GEMINI_API_KEY has expired; update the GitHub secret"
+    if "reported as leaked" in message:
+        return prefix + ": Google has blocked the API key; replace it in Google AI Studio"
+    if "SERVICE_DISABLED" in reasons:
+        return prefix + ": enable the Generative Language API for the key's Google project"
+    if reasons & {
+        "API_KEY_SERVICE_BLOCKED",
+        "API_KEY_HTTP_REFERRER_BLOCKED",
+        "API_KEY_IP_ADDRESS_BLOCKED",
+        "API_KEY_API_TARGET_BLOCKED",
+    }:
+        return prefix + ": API key restrictions prevent this runner from calling Gemini"
+    if "free tier is not available" in message or "free tier is not supported" in message:
+        return prefix + ": Gemini free tier is unavailable for this project/region"
+    if response.status_code == 404:
+        return prefix + ": check GEMINI_MODEL and its generateContent availability"
+    if "response" in message and any(word in message for word in ("schema", "mime", "format")):
+        return prefix + ": structured-output request format/schema is incompatible with the API"
+    if "billing" in message or "BILLING_DISABLED" in reasons:
+        return prefix + ": check billing availability for the configured model/project"
+    if response.status_code in {401, 403}:
+        return prefix + ": check API key permissions and project/model access"
+    return prefix + ": check request configuration and model compatibility"
+
+
 def validate_response(raw: str, expected_ids: set[str]) -> dict[str, Analysis]:
     """Preserve valid siblings; reject unknown, missing, duplicate and invalid results."""
     try:
@@ -112,7 +158,10 @@ class GeminiAnalyzer:
             "generationConfig": {
                 "temperature": 0.2,
                 "maxOutputTokens": 16_384,
-                "responseFormat": {"text": {"mimeType": "application/json", "schema": self.schema}},
+                # These REST fields accept a MIME string and an arbitrary JSON Schema.
+                # responseFormat.text.mimeType instead expects a protobuf enum, not this string.
+                "responseMimeType": "application/json",
+                "responseJsonSchema": self.schema,
             },
         }
         endpoint = (
@@ -144,7 +193,12 @@ class GeminiAnalyzer:
                 time.sleep(delay)
                 continue
             if response.status_code != 200:
-                raise AnalysisError(f"Gemini rejected request (HTTP {response.status_code})")
+                error_type = (
+                    AnalysisConfigurationError
+                    if response.status_code in {400, 401, 402, 403, 404}
+                    else AnalysisError
+                )
+                raise error_type(rejection_description(response))
             try:
                 data = response.json()
                 candidate = data["candidates"][0]
@@ -176,6 +230,9 @@ class GeminiAnalyzer:
                 try:
                     raw = self._request(remaining)
                     valid.update(validate_response(raw, {article.id for article in remaining}))
+                except AnalysisConfigurationError:
+                    # Repeating a bad key or schema across all batches only wastes time/quota.
+                    raise
                 except AnalysisError as error:
                     logger.warning("%s; skipped this AI batch", error)
                     break

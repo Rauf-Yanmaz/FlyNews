@@ -3,7 +3,13 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from src.ai_analyzer import AnalysisError, GeminiAnalyzer, validate_response
+from src.ai_analyzer import (
+    AnalysisConfigurationError,
+    AnalysisError,
+    GeminiAnalyzer,
+    rejection_description,
+    validate_response,
+)
 from src.config import Config
 
 
@@ -77,10 +83,10 @@ def test_rest_payload_and_response_parsing(article):
     call = session.post.call_args
     assert call.kwargs["headers"] == {"x-goog-api-key": "secret"}
     assert "secret" not in call.args[0]
-    assert (
-        call.kwargs["json"]["generationConfig"]["responseFormat"]["text"]["schema"]["type"]
-        == "array"
-    )
+    generation = call.kwargs["json"]["generationConfig"]
+    assert generation["responseMimeType"] == "application/json"
+    assert generation["responseJsonSchema"]["type"] == "array"
+    assert "responseFormat" not in generation
 
 
 def test_truncated_response_rejected(article):
@@ -90,3 +96,61 @@ def test_truncated_response_rejected(article):
         "candidates": [{"finishReason": "MAX_TOKENS", "content": {"parts": [{"text": "[]"}]}}],
     }
     assert GeminiAnalyzer(Config(), session)._request([article]) == ""
+
+
+@pytest.mark.parametrize("status", [400, 401, 402, 403, 404])
+def test_permanent_request_rejection_stops_later_batches(status, article, monkeypatch):
+    sleep = MagicMock()
+    monkeypatch.setattr("src.ai_analyzer.time.sleep", sleep)
+    session = MagicMock()
+    session.post.return_value.status_code = status
+    session.post.return_value.json.return_value = {
+        "error": {"message": "request rejected", "status": "INVALID_ARGUMENT"},
+    }
+    analyzer = GeminiAnalyzer(Config(ai_batch_size=1), session)
+    with pytest.raises(AnalysisConfigurationError, match=f"HTTP {status}"):
+        analyzer.analyze([article, article.model_copy(update={"id": "second"})])
+    assert session.post.call_count == 1
+    sleep.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "message,reason,expected",
+    [
+        ("API key not valid. Please pass a valid API key.", "API_KEY_INVALID", "is invalid"),
+        ("Your API key was reported as leaked.", "", "blocked the API key"),
+        ("Request rejected", "SERVICE_DISABLED", "enable the Generative Language API"),
+        ("Request rejected", "API_KEY_HTTP_REFERRER_BLOCKED", "restrictions prevent"),
+        ("Invalid value at generation_config.response_format.text.mime_type", "", "format/schema"),
+    ],
+)
+def test_provider_diagnostics_are_actionable_without_logging_raw_text(message, reason, expected):
+    response = MagicMock()
+    response.status_code = 400
+    response.json.return_value = {
+        "error": {
+            "message": message + " secret-key-should-never-be-logged",
+            "details": [{"reason": reason, "metadata": {"api_key": "secret-key"}}],
+        },
+    }
+    result = rejection_description(response)
+    assert expected in result
+    assert "secret-key" not in result
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        None,
+        [],
+        {},
+        {"error": None},
+        {"error": {"message": None}},
+        {"error": {"message": "rejected", "details": None}},
+    ],
+)
+def test_malformed_error_bodies_do_not_leak_or_crash(payload):
+    response = MagicMock()
+    response.status_code = 400
+    response.json.return_value = payload
+    assert "HTTP 400" in rejection_description(response)

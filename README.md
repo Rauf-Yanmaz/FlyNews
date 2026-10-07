@@ -164,6 +164,13 @@ check [Gemini rate limits](https://ai.google.dev/gemini-api/docs/rate-limits) an
 [GitHub Actions billing](https://docs.github.com/en/billing/concepts/product-billing/github-actions)
 instead of assuming unlimited free execution.
 
+Gemini requests use `generationConfig.responseMimeType` and `responseJsonSchema` on
+the REST `generateContent` endpoint. A permanent request, key or model rejection
+(HTTP 400/401/402/403/404) stops promptly rather than repeating the same failure for all
+batches. Logs include fixed diagnostic hints for invalid/blocked keys, permissions and
+schema problems; provider response bodies and credentials are never printed. Temporary
+batch failures and malformed individual analyses still use the normal recovery behavior.
+
 ## Persistent state and recovery
 
 This MVP chooses **Option A: GitHub Actions cache**, plus a 30-day downloadable artifact
