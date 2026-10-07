@@ -1,0 +1,1 @@
+"""FlyNews scheduled intelligence digest."""
